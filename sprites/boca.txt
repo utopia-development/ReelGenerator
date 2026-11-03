@@ -1,0 +1,16 @@
+# Estados de boca (se dibujan ENCIMA del personaje). Estado 0 = boca cerrada = sprite original.
+# '@ estado fila columna' = esquina superior izquierda dentro del sprite del personaje.
+k=40,12,14
+t=150,55,65
+@ 1 28 25
+kkkkk
+.kkk.
+@ 2 28 24
+kkkkkkk
+.kkkkk.
+..kkk..
+@ 3 27 24
+.kkkkk.
+kkkkkkk
+kktttkk
+.kkkkk.
