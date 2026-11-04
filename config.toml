@@ -123,7 +123,7 @@ min_entre_ondas = 0.45        # segundos minimos entre una onda grande y la sigu
 
 # -----------------------------------------------------------------------------
 #  [secundario]  UN elemento extra que cruza la pantalla POR DETRAS del personaje
-#                (entra por un lado y sale por el otro, una sola vez por video)
+#                (entra por un lado y sale por el otro; puede repetirse en loop)
 # -----------------------------------------------------------------------------
 #  Cada frame de animacion es un .txt normal (el mismo formato de tu editor).
 #  Para cambiar de elemento: haz tus sprites y lista sus archivos en 'frames'.
@@ -138,10 +138,14 @@ mira_a = "derecha"            # hacia donde mira el sprite dibujado: "derecha" |
 
 # --- cuando y por donde cruza ---
 direccion = "izquierda_a_derecha"   # | "derecha_a_izquierda"
-aparece_en_porcentaje = 35    # empieza a entrar al X% de la duracion del video
+aparece_en_porcentaje = 35    # el PRIMER cruce empieza al X% de la duracion del video
 aparece_en_segundos = -1      # si es >= 0, MANDA sobre el porcentaje (ej. 8 = en el segundo 8)
 velocidad_px_s = 16           # VELOCIDAD de cruce, en pixeles de arte por segundo
                               #   tiempo de cruce ~ (ancho_canvas + ancho_sprite) / velocidad
+
+# --- loop ---
+repetir = true                # true = cruza una y otra vez | false = una sola vez por video
+pausa_seg = 3.0               # segundos de espera DESDE que desaparece hasta que vuelve a entrar
 
 # --- altura ---
 anclaje = "libre"             # "libre" = flota a y_centro_pct | "suelo" = camina sobre el suelo

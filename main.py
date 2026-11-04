@@ -67,6 +67,7 @@ DEFAULTS = {
         "direccion": "izquierda_a_derecha", "mira_a": "derecha",
         "aparece_en_porcentaje": 35, "aparece_en_segundos": -1,
         "velocidad_px_s": 16, "velocidad_pulso": 0.5,
+        "repetir": True, "pausa_seg": 3.0,
         "anclaje": "libre", "y_centro_pct": 42,
         "bamboleo_px": 1.5, "bamboleo_hz": 0.5, "rebote_pulso_px": 2,
         "capa": "delante_arboles",
@@ -517,23 +518,37 @@ class Escena:
         if inicio < 0:
             inicio = n / fps * s["aparece_en_porcentaje"] / 100.0
         f0 = int(inicio * fps)
-        x = -float(sw) if direc > 0 else float(W)
+        pausa = max(0, int(round(s["pausa_seg"] * fps)))
+        x_ini = -float(sw) if direc > 0 else float(W)
         xs = np.full(n, np.nan, np.float32)
-        salio = False
-        for i in range(f0, n):
-            v = s["velocidad_px_s"] * (1 + s["velocidad_pulso"] * float(F["pulso"][i]))
-            x += direc * v / fps
-            xs[i] = x
-            if (direc > 0 and x > W) or (direc < 0 and x < -sw):
-                salio = True
+        cruces, i = 0, f0
+        while i < n:                                         # un ciclo = un cruce completo
+            x = x_ini
+            salio = False
+            while i < n:
+                v = s["velocidad_px_s"] * (1 + s["velocidad_pulso"] * float(F["pulso"][i]))
+                x += direc * v / fps
+                xs[i] = x
+                i += 1
+                if (direc > 0 and x > W) or (direc < 0 and x < -sw):
+                    salio = True                             # ya desaparecio de la escena
+                    break
+            if not salio:
+                break                                        # el video acabo a media pasada
+            cruces += 1
+            if not s["repetir"]:
                 break
+            i += pausa                                       # espera 'pausa_seg' y vuelve a pasar
         sin_pulso = (W + sw) / max(s["velocidad_px_s"], 1e-6)
+        loop = (f"repite cada ~{sin_pulso + s['pausa_seg']:.1f}s (cruce + {s['pausa_seg']:g}s de pausa)"
+                if s["repetir"] else "una sola vez")
         print(f"  Secundario: entra en t={inicio:.1f}s, cruza en ~{sin_pulso:.1f}s "
-              f"({s['velocidad_px_s']} px/s, {len(frames)} frames @ {s['animacion_fps']} fps)")
+              f"({s['velocidad_px_s']} px/s, {len(frames)} frames @ {s['animacion_fps']} fps) | {loop}"
+              f" | cruces completos en este video: {cruces}")
         if f0 >= n:
             print("  ! El secundario empieza despues de que termina el video (no se vera). "
                   "Usa --sec-en o baja aparece_en_porcentaje.")
-        elif not salio:
+        elif cruces == 0:
             print("  ! El video termina antes de que el secundario termine de cruzar.")
         self.sec = dict(frames=frames, xs=xs)
 
