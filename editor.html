@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor pixel art (.txt)</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:#1b1d21;color:#e6e6e6;display:flex;flex-direction:column;overflow:hidden;
+  }
+  header{
+    display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+    padding:8px 10px;background:#232629;border-bottom:1px solid #34383d;
+  }
+  header .sep{width:1px;height:24px;background:#3a3f45;margin:0 4px}
+  header .title{font-weight:600;font-size:14px;margin-right:8px;color:#9fd0ff}
+  button,label.btn{
+    background:#33383d;color:#e6e6e6;border:1px solid #454b52;
+    padding:6px 10px;border-radius:6px;cursor:pointer;font-size:13px;
+    font-family:inherit;line-height:1;user-select:none;
+  }
+  button:hover,label.btn:hover{background:#3d444a}
+  button.active{background:#3f7bd6;border-color:#5b9bf0;color:#fff}
+  input[type=file]{display:none}
+  main{flex:1;display:flex;min-height:0}
+
+  /* ---- paleta ---- */
+  #palettePanel{
+    width:210px;min-width:210px;overflow-y:auto;background:#202327;
+    border-right:1px solid #34383d;padding:10px;
+  }
+  #palettePanel h3{margin:0 0 8px;font-size:12px;letter-spacing:.08em;
+    text-transform:uppercase;color:#8b939c;font-weight:600}
+  .swatch{
+    display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;
+    cursor:pointer;border:2px solid transparent;
+  }
+  .swatch:hover{background:#2a2f35}
+  .swatch.sel{border-color:#5b9bf0;background:#2b3138}
+  .swatch .ch{font-family:ui-monospace,monospace;font-size:13px;width:14px;
+    color:#9aa3ad;text-align:center;flex:none}
+  .swatch .box{width:24px;height:24px;border-radius:4px;border:1px solid #000;flex:none}
+  .swatch .hex{font-family:ui-monospace,monospace;font-size:11px;color:#7d8791}
+  .box.checker{
+    background-color:#fff;
+    background-image:
+      linear-gradient(45deg,#bbb 25%,transparent 25%),
+      linear-gradient(-45deg,#bbb 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#bbb 75%),
+      linear-gradient(-45deg,transparent 75%,#bbb 75%);
+    background-size:8px 8px;
+    background-position:0 0,0 4px,4px -4px,-4px 0;
+  }
+  #colorBox{margin-top:12px;padding-top:12px;border-top:1px solid #34383d}
+  #colorBox label{display:block;font-size:12px;color:#8b939c;margin-bottom:6px}
+  #colorInput{width:100%;height:34px;border:1px solid #454b52;border-radius:6px;
+    background:#15171a;cursor:pointer;padding:2px}
+
+  /* ---- lienzo ---- */
+  #canvasWrap{
+    flex:1;overflow:auto;background:#15171a;display:flex;
+    align-items:center;justify-content:center;padding:20px;
+  }
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;
+    box-shadow:0 0 0 1px #3d444a,0 6px 24px rgba(0,0,0,.5);
+    cursor:crosshair;touch-action:none;display:block}
+
+  /* ---- salida ---- */
+  #outputPanel{
+    width:340px;min-width:300px;display:flex;flex-direction:column;gap:8px;
+    background:#202327;border-left:1px solid #34383d;padding:10px;
+  }
+  #outputPanel h3{margin:0;font-size:12px;letter-spacing:.08em;
+    text-transform:uppercase;color:#8b939c;font-weight:600}
+  #output{
+    flex:1;width:100%;font-family:ui-monospace,monospace;font-size:12px;line-height:1.25;
+    background:#15171a;color:#b7e3b0;border:1px solid #34383d;border-radius:6px;
+    padding:8px;resize:none;white-space:pre;overflow:auto;
+  }
+  .row{display:flex;gap:8px}
+  .row button{flex:1}
+  #toast{
+    position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);
+    background:#3f7bd6;color:#fff;padding:10px 18px;border-radius:8px;
+    font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:50;
+  }
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">🎨 Editor pixel art</span>
+
+  <label class="btn" for="fileInput">📂 Abrir .txt</label>
+  <input id="fileInput" type="file" accept=".txt,text/plain">
+
+  <span class="sep"></span>
+
+  <button id="toolPencil" class="active" title="Lápiz (B)">✏️ Lápiz</button>
+  <button id="toolEraser" title="Goma (E)">🧽 Goma</button>
+  <button id="toolPicker" title="Cuentagotas (I)">💧 Cuentagotas</button>
+
+  <span class="sep"></span>
+
+  <span style="font-size:12px;color:#8b939c">Grosor</span>
+  <button class="brushBtn active" data-brush="1">1</button>
+  <button class="brushBtn" data-brush="3">3</button>
+  <button class="brushBtn" data-brush="10">10</button>
+
+  <span class="sep"></span>
+
+  <button id="zoomOut" title="Alejar">➖</button>
+  <button id="zoomIn" title="Acercar">➕</button>
+  <button id="gridBtn" title="Cuadrícula (G)">▦ Rejilla</button>
+
+  <span class="sep"></span>
+
+  <button id="undoBtn" title="Deshacer (Ctrl+Z)">↩️ Deshacer</button>
+</header>
+
+<main>
+  <aside id="palettePanel">
+    <h3>Paleta</h3>
+    <div id="paletteList"></div>
+    <div id="colorBox">
+      <label for="colorInput">Color de la letra seleccionada</label>
+      <input type="color" id="colorInput" value="#ffffff">
+    </div>
+  </aside>
+
+  <section id="canvasWrap">
+    <canvas id="cv"></canvas>
+  </section>
+
+  <aside id="outputPanel">
+    <h3>Resultado (.txt)</h3>
+    <textarea id="output" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="copyAll">📋 Copiar todo</button>
+      <button id="copyMatrix">📋 Solo matriz</button>
+    </div>
+    <div class="row">
+      <button id="downloadBtn">💾 Descargar .txt</button>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<!-- Ejemplo cargado al inicio (puedes reemplazarlo abriendo tu propio .txt) -->
+<script type="text/plain" id="demoData">
+# paleta: LETRA=R,G,B   ('.' = transparente)
+A=11,9,10
+B=15,19,23
+C=19,20,22
+D=24,15,14
+E=24,20,18
+F=24,23,23
+G=27,28,29
+H=34,28,26
+I=40,27,20
+J=41,35,34
+K=56,30,18
+L=57,34,23
+M=70,36,20
+N=97,54,30
+O=102,61,34
+P=109,62,31
+Q=120,102,81
+R=175,158,121
+# matriz
+..............................................
+..............................................
+................BBCBCBBBGG.EBBB...............
+.............CBBBBGGGBBBBGBCBGGGGG............
+............FCBBGBBCCGCBBGBBBGCCCGF...........
+............BBBBGBCBBGCCCGCCCGBCBGG...........
+...........BBBGGBBGGBCEEEELDEFBGGBGGQ.........
+...........BCGGBBGCBBPPPPPPPPPPEFBBGGG........
+.........CBBGCCCGCBCLPPPPPPPPPPPOEBCGG........
+.........CCBGBBCGBDDKPPPPPPPPPPPODCCFG........
+.........CCBGBCCGCLLLPPPPPPPPPPPPOCCCA........
+........CCCBGBBGBELLPPPPPPPPPPPPPOECGGG.......
+........BCCGBBBGBKLLPPPPPPPPPPPPPPPBBBG.......
+........BBCGBBBGEKLLBBBCBPPPPPCBBBCBCBG.......
+........BBCGBCCGFMLMBCBBFPPPPPCCBBBBCBG.......
+.......BBGGBBGGBLLHGJJJJJGPPPLGJJJJJFBB.......
+.......BBGGBBBCBLGJJMMMMMJGGGGLMMMMGJJBC......
+.......BBGGBPCBGGGLLGGGDMLGLMGMGGGGGJJBG......
+.......BBGGKNDHGIGKMKGIIMMHMMGNGDMLGJJBG......
+.......BBGHPLKLBLGNOOGLKPOGOOFOHDOOGJJBG......
+......CBBGHOLFCBKGONOGLKOGOPOPGGDOOGCBBG......
+......CBGCEPLKLBLPHGOOPOMGOOPPGPPPOJDB.B......
+......BCGCBDORQBLPNOHHHIJOPOPPLIHHHBCC.BEE....
+......BBGBBBPRQCLOOPHHHHJPOOOPLIHHHBCC.BBC....
+......BBGCCBBRQEHPODOOPPPLLLLLKPPPPFCB.CBF....
+....BCCGCBCBBBCEHPACCOOOHHHHHHHOOPPCCB..BF....
+....CCBGCCCGBBCEHIOCOOIIHPPPPPPGDPHBCBB.BF....
+....CCBGCCBGBBCBHHOPPOMNLMNNMMNOOMHBBBC.CF....
+....BBBGCCBGBBCCHHOPPGONKLLLLLLOOHHBCBC.CF....
+...CBBGBBCBGCBBBEHHHHOPOOOOOPOOONHECBBC.CF....
+...BBCCCCGGBBBBBKEEEHHOPPLKLLLNHHIBGBCB...B...
+...BCCCCBGGGCBCBLLEEEHIIIOOOOOIHHCBGBCC...B...
+...BBCCBBGGGBBBBKKEEEHHHHOONNOHHHCCGBBB...F...
+..CBCCCBBBBGGCBBKKKKKEHHHHHHHHHBBCBGGGBB......
+..CQCBCBCBCBGGJBQKKKKKEEEEEEEEBBCCBGGFGB......
+ACBQBCBGGCBBGGJBRRLKKKKKKKKKKMBBCBGGCGGB......
+AC.ACCGGGGGBBGGGJRRRQKKKKKKKLQBBBBGGBBBGED....
+AB.CCCGGGGFCBFJGBRRRRKKLKLKKKRCBCBGGBBBGBE....
+...BGGGGGGGGCRRGGRRRQRRRRRRRRRBCBGGBBBGGGFB...
+..BBCBGGGGGGCBARGBRRRRRRQRRRRRCCBGPCGGGGGGG...
+..BBCCCGGGGGGBARGBRRRRRRRRRRRRCGGGDBGGGGGGGC..
+..BCCBCGGGGGGBARDBRRRRRRRRRRRRBGGFDCGGGGGGGB..
+ABCGGGCCGGGGGCCBRCRRRRRRRRRRRBBGGPBGGGGGGGBB..
+ACCGGGGCGGGGGGGBRCCERRRRRRRRRBBGGPBGGGGGBCCC..
+ABCGGGGBBGGGGGGBRGCBRRRRRRRRRBGGABGGGGGGBBGGG.
+ABCGGGGGBGGGGGGBEGCCRRRRRRRR.CGGDBGGGGGBBCGGG.
+</script>
+
+<script>
+(() => {
+  'use strict';
+
+  /* =========================================================
+     ESTADO
+     ========================================================= */
+  const state = {
+    palette: new Map(),   // letra -> {r,g,b}
+    order:   [],          // orden de las letras en el archivo
+    rows:    [],          // matriz como array de arrays de chars
+    cols:    0,
+    cs:      12,          // tamaño de celda en px
+    tool:    'pencil',    // pencil | eraser | picker
+    brush:   1,
+    current: 'B',
+    showGrid:false,
+    hover:   null,
+    drawing: false,
+    lastCell:null,
+    history: []
+  };
+
+  const canvas     = document.getElementById('cv');
+  const ctx        = canvas.getContext('2d');
+  const paletteList= document.getElementById('paletteList');
+  const outputEl   = document.getElementById('output');
+  const colorInput = document.getElementById('colorInput');
+  const toastEl    = document.getElementById('toast');
+
+  /* =========================================================
+     UTILIDADES
+     ========================================================= */
+  const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+  const rgbToHex = c => '#' + [c.r,c.g,c.b].map(v => v.toString(16).padStart(2,'0')).join('');
+  const hexToRgb = h => { const n = parseInt(h.slice(1),16);
+    return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 }; };
+
+  let toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+  }
+
+  /* =========================================================
+     PARSEO DEL ARCHIVO
+     ========================================================= */
+  function loadText(text){
+    const lines = text.split(/\r?\n/);
+    const palette = new Map();
+    const order = [];
+    const rows = [];
+    let inMatrix = false;
+
+    for (const raw of lines){
+      const line = raw.replace(/\s+$/, '');   // quitar espacios al final
+      if (!inMatrix){
+        const t = line.trim();
+        if (!t) continue;
+        if (t.startsWith('#')){
+          if (/matriz/i.test(t)) inMatrix = true;
+          continue;
+        }
+        const m = t.match(/^(\S)\s*=\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/);
+        if (m){
+          const ch = m[1];
+          if (!palette.has(ch)) order.push(ch);
+          palette.set(ch, {
+            r: clamp(+m[2],0,255),
+            g: clamp(+m[3],0,255),
+            b: clamp(+m[4],0,255)
+          });
+        } else {
+          // no parece una entrada de paleta -> empieza la matriz
+          inMatrix = true;
+          rows.push(line.split(''));
+        }
+      } else {
+        if (line.trim() === '') continue;
+        rows.push(line.split(''));
+      }
+    }
+
+    if (!rows.length){
+      toast('No se encontró la matriz');
+      return;
+    }
+
+    // rellenar filas para que todas tengan el mismo ancho
+    const cols = rows.reduce((m,r) => Math.max(m, r.length), 0);
+    for (const r of rows) while (r.length < cols) r.push('.');
+
+    state.palette = palette;
+    state.order   = order;
+    state.rows    = rows;
+    state.cols    = cols;
+    state.history = [];
+    state.hover   = null;
+    state.drawing = false;
+    state.lastCell= null;
+
+    if (!palette.has(state.current)) state.current = order[0] || '.';
+
+    renderPalette();
+    syncColorInput();
+    scheduleDraw();
+    updateOutput();
+  }
+
+  /* =========================================================
+     DIBUJO DEL LIENZO
+     ========================================================= */
+  let rafId = null;
+  function scheduleDraw(){
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => { rafId = null; draw(); });
+  }
+
+  function draw(){
+    const rows = state.rows, cols = state.cols;
+    if (!rows.length || !cols){
+      canvas.width = 1; canvas.height = 1;
+      canvas.style.width = '0px'; canvas.style.height = '0px';
+      return;
+    }
+
+    const cs  = state.cs;
+    const W   = cols * cs;
+    const H   = rows.length * cs;
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    // fondo tipo "transparencia"
+    ctx.fillStyle = '#c9c9c9';
+    ctx.fillRect(0, 0, W, H);
+
+    for (let y = 0; y < rows.length; y++){
+      const row = rows[y];
+      for (let x = 0; x < cols; x++){
+        const ch = row[x];
+        if (ch === '.' || ch === undefined){
+          if ((x + y) % 2 === 0){
+            ctx.fillStyle = '#e8e8e8';
+            ctx.fillRect(x*cs, y*cs, cs, cs);
+          }
+        } else {
+          const c = state.palette.get(ch);
+          ctx.fillStyle = c ? `rgb(${c.r},${c.g},${c.b})` : '#ff00ff';
+          ctx.fillRect(x*cs, y*cs, cs, cs);
+        }
+      }
+    }
+
+    // rejilla
+    if (state.showGrid && cs >= 5){
+      ctx.strokeStyle = 'rgba(0,0,0,0.20)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x <= cols; x++){
+        ctx.moveTo(x*cs + 0.5, 0); ctx.lineTo(x*cs + 0.5, H);
+      }
+      for (let y = 0; y <= rows.length; y++){
+        ctx.moveTo(0, y*cs + 0.5); ctx.lineTo(W, y*cs + 0.5);
+      }
+      ctx.stroke();
+    }
+
+    // previsualización del pincel
+    if (state.hover && state.tool !== 'picker'){
+      const s = state.brush;
+      const start = -Math.floor((s - 1) / 2);
+      const hx = state.hover.x + start;
+      const hy = state.hover.y + start;
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.strokeRect(hx*cs + 1, hy*cs + 1, s*cs - 2, s*cs - 2);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+      ctx.strokeRect(hx*cs - 0.5, hy*cs - 0.5, s*cs + 1, s*cs + 1);
+    }
+  }
+
+  /* =========================================================
+     PINTAR
+     ========================================================= */
+  function getCell(ev){
+    if (!state.cols || !state.rows.length) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = Math.floor((ev.clientX - rect.left) / rect.width  * state.cols);
+    const y = Math.floor((ev.clientY - rect.top ) / rect.height * state.rows.length);
+    if (x < 0 || x >= state.cols || y < 0 || y >= state.rows.length) return null;
+    return { x, y };
+  }
+
+  function applyBrush(cx, cy, ch){
+    const s = state.brush;
+    const start = -Math.floor((s - 1) / 2);
+    for (let dy = 0; dy < s; dy++){
+      for (let dx = 0; dx < s; dx++){
+        const x = cx + start + dx;
+        const y = cy + start + dy;
+        if (x >= 0 && x < state.cols && y >= 0 && y < state.rows.length){
+          state.rows[y][x] = ch;
+        }
+      }
+    }
+  }
+
+  function strokeTo(cell){
+    const ch = state.tool === 'eraser' ? '.' : state.current;
+    if (state.lastCell){
+      const a = state.lastCell, b = cell;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const steps = Math.max(Math.abs(dx), Math.abs(dy));
+      if (steps === 0){
+        applyBrush(b.x, b.y, ch);
+      } else {
+        for (let i = 1; i <= steps; i++){
+          applyBrush(Math.round(a.x + dx*i/steps), Math.round(a.y + dy*i/steps), ch);
+        }
+      }
+    } else {
+      applyBrush(cell.x, cell.y, ch);
+    }
+    state.lastCell = cell;
+    scheduleDraw();
+    updateOutput();
+  }
+
+  function pushHistory(){
+    state.history.push(state.rows.map(r => r.join('')));
+    if (state.history.length > 80) state.history.shift();
+  }
+
+  function undo(){
+    if (!state.history.length) { toast('Nada que deshacer'); return; }
+    const snap = state.history.pop();
+    state.rows = snap.map(l => l.split(''));
+    state.cols = state.rows[0] ? state.rows[0].length : 0;
+    scheduleDraw();
+    updateOutput();
+  }
+
+  /* =========================================================
+     EVENTOS DEL RATÓN / TÁCTIL
+     ========================================================= */
+  canvas.addEventListener('pointerdown', ev => {
+    if (!state.rows.length) return;
+    const cell = getCell(ev);
+    if (!cell) return;
+    ev.preventDefault();
+    canvas.setPointerCapture(ev.pointerId);
+
+    if (state.tool === 'picker'){
+      const ch = state.rows[cell.y][cell.x];
+      if (ch && ch !== '.'){
+        state.current = ch;
+        setTool('pencil');
+        renderPalette();
+        syncColorInput();
+        toast('Letra "' + ch + '" seleccionada');
+      }
+      return;
+    }
+
+    pushHistory();
+    state.drawing  = true;
+    state.lastCell = null;
+    strokeTo(cell);
+  });
+
+  canvas.addEventListener('pointermove', ev => {
+    const cell = getCell(ev);
+    state.hover = cell;
+    if (state.drawing && cell) strokeTo(cell);
+    else scheduleDraw();
+  });
+
+  function endStroke(){
+    state.drawing  = false;
+    state.lastCell = null;
+  }
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+  canvas.addEventListener('pointerleave', () => {
+    state.hover = null;
+    endStroke();
+    scheduleDraw();
+  });
+
+  /* =========================================================
+     PALETA (panel lateral)
+     ========================================================= */
+  function renderPalette(){
+    paletteList.innerHTML = '';
+
+    // ---- transparente ('.') ----
+    const t = document.createElement('div');
+    t.className = 'swatch' + (state.current === '.' ? ' sel' : '');
+    const tCh = document.createElement('span');
+    tCh.className = 'ch'; tCh.textContent = '.';
+    const tBox = document.createElement('span');
+    tBox.className = 'box checker';
+    const tHex = document.createElement('span');
+    tHex.className = 'hex'; tHex.textContent = 'transp.';
+    t.append(tCh, tBox, tHex);
+    t.addEventListener('click', () => {
+      state.current = '.';
+      setTool('pencil');
+      renderPalette();
+      syncColorInput();
+    });
+    paletteList.appendChild(t);
+
+    // ---- letras de la paleta ----
+    for (const ch of state.order){
+      const c = state.palette.get(ch);
+      const el = document.createElement('div');
+      el.className = 'swatch' + (state.current === ch ? ' sel' : '');
+
+      const chEl = document.createElement('span');
+      chEl.className = 'ch'; chEl.textContent = ch;
+
+      const box = document.createElement('span');
+      box.className = 'box';
+      box.style.background = `rgb(${c.r},${c.g},${c.b})`;
+
+      const hex = document.createElement('span');
+      hex.className = 'hex'; hex.textContent = rgbToHex(c);
+
+      el.append(chEl, box, hex);
+      el.addEventListener('click', () => {
+        state.current = ch;
+        setTool('pencil');
+        renderPalette();
+        syncColorInput();
+      });
+      paletteList.appendChild(el);
+    }
+  }
+
+  function syncColorInput(){
+    const c = state.palette.get(state.current);
+    colorInput.disabled = !c;
+    colorInput.value = c ? rgbToHex(c) : '#000000';
+  }
+
+  colorInput.addEventListener('input', () => {
+    const c = state.palette.get(state.current);
+    if (!c) return;
+    const n = hexToRgb(colorInput.value);
+    c.r = n.r; c.g = n.g; c.b = n.b;
+    renderPalette();
+    syncColorInput();
+    scheduleDraw();
+    updateOutput();
+  });
+
+  /* =========================================================
+     HERRAMIENTAS
+     ========================================================= */
+  function setTool(tool){
+    state.tool = tool;
+    document.getElementById('toolPencil').classList.toggle('active', tool === 'pencil');
+    document.getElementById('toolEraser').classList.toggle('active', tool === 'eraser');
+    document.getElementById('toolPicker').classList.toggle('active', tool === 'picker');
+    canvas.style.cursor = tool === 'picker' ? 'copy' : 'crosshair';
+    scheduleDraw();
+  }
+
+  document.getElementById('toolPencil').onclick = () => setTool('pencil');
+  document.getElementById('toolEraser').onclick = () => setTool('eraser');
+  document.getElementById('toolPicker').onclick = () => setTool('picker');
+
+  document.querySelectorAll('.brushBtn').forEach(b => {
+    b.addEventListener('click', () => {
+      state.brush = +b.dataset.brush;
+      document.querySelectorAll('.brushBtn').forEach(o => o.classList.remove('active'));
+      b.classList.add('active');
+      scheduleDraw();
+    });
+  });
+
+  document.getElementById('gridBtn').addEventListener('click', (e) => {
+    state.showGrid = !state.showGrid;
+    e.currentTarget.classList.toggle('active', state.showGrid);
+    scheduleDraw();
+  });
+
+  function zoom(delta){
+    state.cs = clamp(state.cs + delta, 2, 48);
+    scheduleDraw();
+  }
+  document.getElementById('zoomIn').onclick  = () => zoom(+2);
+  document.getElementById('zoomOut').onclick = () => zoom(-2);
+
+  document.getElementById('undoBtn').onclick = undo;
+
+  /* =========================================================
+     SALIDA DE TEXTO
+     ========================================================= */
+  function buildFullText(){
+    const out = ["# paleta: LETRA=R,G,B   ('.' = transparente)"];
+    for (const ch of state.order){
+      const c = state.palette.get(ch);
+      out.push(`${ch}=${c.r},${c.g},${c.b}`);
+    }
+    out.push('# matriz');
+    for (const r of state.rows) out.push(r.join(''));
+    return out.join('\n') + '\n';
+  }
+
+  function buildMatrixText(){
+    return state.rows.map(r => r.join('')).join('\n') + '\n';
+  }
+
+  function updateOutput(){
+    outputEl.value = buildFullText().trimEnd();
+  }
+
+  async function copyText(text){
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('✅ Copiado al portapapeles');
+    } catch (err){
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); toast('✅ Copiado'); }
+      catch (e2){ toast('❌ No se pudo copiar'); }
+      document.body.removeChild(ta);
+    }
+  }
+
+  document.getElementById('copyAll').onclick    = () => copyText(buildFullText());
+  document.getElementById('copyMatrix').onclick = () => copyText(buildMatrixText());
+
+  document.getElementById('downloadBtn').onclick = () => {
+    const blob = new Blob([buildFullText()], { type: 'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'personaje.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('💾 Archivo descargado');
+  };
+
+  /* =========================================================
+     CARGAR ARCHIVO
+     ========================================================= */
+  document.getElementById('fileInput').addEventListener('change', async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    loadText(text);
+    toast('📂 ' + file.name + ' cargado');
+    ev.target.value = ''; // permitir recargar el mismo archivo
+  });
+
+  /* =========================================================
+     ATAJOS DE TECLADO
+     ========================================================= */
+  window.addEventListener('keydown', (ev) => {
+    const tag = (ev.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z'){
+      ev.preventDefault(); undo(); return;
+    }
+    switch (ev.key.toLowerCase()){
+      case 'b': setTool('pencil'); break;
+      case 'e': setTool('eraser'); break;
+      case 'i': setTool('picker'); break;
+      case 'g':
+        document.getElementById('gridBtn').click();
+        break;
+      case '1': case '2': case '3': {
+        const sizes = { '1':1, '2':3, '3':10 };
+        state.brush = sizes[ev.key];
+        document.querySelectorAll('.brushBtn').forEach(o =>
+          o.classList.toggle('active', +o.dataset.brush === state.brush));
+        scheduleDraw();
+        break;
+      }
+      case '+': case '=': zoom(+2); break;
+      case '-': case '_': zoom(-2); break;
+    }
+  });
+
+  /* =========================================================
+     ARRANQUE
+     ========================================================= */
+  const demo = document.getElementById('demoData').textContent;
+  loadText(demo);
+  setTool('pencil');
+})();
+</script>
+</body>
+</html>
