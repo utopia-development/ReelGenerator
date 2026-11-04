@@ -10,6 +10,7 @@ Uso rapido:
     python main.py mi_audio.mp3 --demucs        # separa voz/musica con IA (mucho mejor)
     python main.py mi_audio.mp3 --preview 10    # solo los primeros 10 s (para probar rapido)
     python main.py mi_audio.mp3 --png 12.5      # guarda UN frame (t=12.5 s) como PNG, sin video
+    python main.py mi_audio.mp3 -psyco          # ondas psicodelicas en el cielo al ritmo de medios/agudos
 """
 import argparse
 import subprocess
@@ -38,6 +39,12 @@ SUELO = (16, 30, 30)
 COLORES_HOJA = [(222, 126, 44), (236, 182, 56), (186, 74, 44), (150, 170, 64)]
 N_HOJAS = 80
 N_ESTRELLAS = 45
+
+# modo -psyco: ondas de color translucidas sobre el cielo
+PSYCO_ALFA_MAX = 0.40       # opacidad maxima del efecto (0 = invisible, 1 = tapa el cielo)
+PSYCO_PASOS_COLOR = 12      # niveles de tono (posterizado -> look pixel art)
+PSYCO_NIVELES_ALFA = 6      # niveles de transparencia con tramado (dithering)
+PSYCO_MIN_ENTRE_ONDAS = 0.45  # segundos minimos entre una onda grande y la siguiente
 
 
 # --------------------------------------------------------------------------- #
@@ -127,6 +134,19 @@ def pegar_con_viento(canvas, rgb, mask, x, y, t, viento, fase, amp=3.0, mezcla=N
         pegar(canvas, rgb[j:j + 1], mask[j:j + 1], x + int(round(desp)), y + j, mezcla, cantidad)
 
 
+def arcoiris(h):
+    """Tono h (cualquier forma, ciclico 0-1) -> RGB [...,3] float 0-255, posterizado en pasos."""
+    h = np.floor((h % 1.0) * PSYCO_PASOS_COLOR) / PSYCO_PASOS_COLOR
+    fase = np.array([0.0, 1 / 3, 2 / 3], np.float32)
+    return (0.5 + 0.5 * np.cos(2 * np.pi * (h[..., None] + fase))) * 255.0
+
+
+def matriz_bayer(h, w):
+    """Tramado ordenado 4x4 en [0,1): da el efecto de transparencia 'pixel art'."""
+    b = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], np.float32) / 16.0
+    return np.tile(b, (h // 4 + 1, w // 4 + 1))[:h, :w]
+
+
 # --------------------------------------------------------------------------- #
 #  AUDIO  ->  FEATURES POR FRAME
 # --------------------------------------------------------------------------- #
@@ -175,7 +195,46 @@ def suavizar(x, ataque=0.7, caida=0.25):
     return out
 
 
-def analizar(audio, fps, usar_demucs, tmpdir):
+def features_psyco(S, fr, ts, sr, hop, n, fps):
+    """Features extra para -psyco, SOLO de medios/agudos de la musica:
+       medios   : energia 400-4000 Hz por frame
+       pulso_ma : pulso (1 -> 0) en cada golpe de medios/agudos (hi-hats, snares, sintes...)
+       ondas    : lista de ondas grandes (una por golpe fuerte), cada una recorre el cielo"""
+    import librosa
+    medios = suavizar(normalizar(a_frames(S[(fr >= 400) & (fr < 4000)].mean(0), ts, n, fps)), 0.6, 0.2)
+
+    S_db = librosa.amplitude_to_db(S[fr >= 500], ref=np.max)
+    env = librosa.onset.onset_strength(S=S_db, sr=sr, hop_length=hop)
+    env = env / (np.percentile(env, 95) + 1e-9)
+    wait = max(1, int(0.10 * sr / hop))
+    idx = librosa.onset.onset_detect(onset_envelope=env, sr=sr, hop_length=hop, wait=wait, units="frames")
+    t_on = librosa.frames_to_time(idx, sr=sr, hop_length=hop)
+    fuerza = np.clip(env[idx] / 1.5, 0, 1) if len(idx) else np.array([])
+
+    pulso = np.zeros(n, np.float32)
+    for tt in t_on:
+        f0 = int(tt * fps)
+        f1 = min(n, f0 + int(fps))
+        if f0 >= n:
+            continue
+        d = (np.arange(f0, f1) / fps) - tt
+        pulso[f0:f1] = np.maximum(pulso[f0:f1], np.exp(-np.maximum(d, 0) / 0.14))
+
+    rng = np.random.default_rng(11)
+    ondas, ultimo = [], -9.0
+    for tt, fz in zip(t_on, fuerza):
+        if tt - ultimo < PSYCO_MIN_ENTRE_ONDAS or fz < 0.3:
+            continue
+        ultimo = tt
+        ang = rng.uniform(-0.55, 0.55) + (np.pi if rng.random() < 0.5 else 0.0)   # sentido y diagonal
+        ondas.append(dict(t0=float(tt), f=float(fz), ang=float(ang), dur=float(rng.uniform(1.8, 2.6)),
+                          fases=rng.uniform(0, 6.28, 3).astype(np.float32), hue=float(rng.random())))
+    print(f"  Psyco: {len(t_on)} golpes de medios/agudos -> {len(ondas)} ondas grandes")
+    return dict(medios=medios, pulso_ma=pulso, ondas=ondas,
+                ondas_t0=np.array([o["t0"] for o in ondas], np.float64))
+
+
+def analizar(audio, fps, usar_demucs, tmpdir, psyco=False):
     import librosa
     wav = Path(tmpdir) / "mono.wav"
     ffmpeg_a_wav(audio, wav)
@@ -229,15 +288,22 @@ def analizar(audio, fps, usar_demucs, tmpdir):
     viento = suavizar(musica, 0.05, 0.03)                  # viento lento
     print(f"  Audio: {dur:.1f}s -> {n} frames | frames con voz: {(voz > 0.1).mean() * 100:.0f}% "
           f"| beats: {int((np.diff((pulso > 0.9).astype(int)) == 1).sum())}")
-    return dict(n=n, voz=voz, musica=musica, graves=graves, agudos=agudos, pulso=pulso, viento=viento)
+    F = dict(n=n, voz=voz, musica=musica, graves=graves, agudos=agudos, pulso=pulso, viento=viento)
+    if psyco:
+        F.update(features_psyco(S, fr, ts, sr, hop, n, fps))
+    return F
 
 
 # --------------------------------------------------------------------------- #
 #  ESCENA  (aqui vive todo el dibujo)
 # --------------------------------------------------------------------------- #
 class Escena:
-    def __init__(self, ruta_personaje, seed=7):
+    def __init__(self, ruta_personaje, seed=7, psyco=False, psyco_intensidad=1.0):
         self.rng = np.random.default_rng(seed)
+        self.psyco = psyco
+        self.psyco_k = float(psyco_intensidad)
+        self.X, self.Y = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+        self.bayer = matriz_bayer(H, W)
         self.per_rgb, self.per_mask = cargar_sprite(ruta_personaje)
         self.arb_rgb, self.arb_mask = cargar_sprite(AQUI / "sprites" / "arbol.txt")
         self.bocas = cargar_bocas(AQUI / "sprites" / "boca.txt")
@@ -320,6 +386,49 @@ class Escena:
         ale = ok & (np.sin(self.hf[sel]) > 0.3) & (ix + 1 < W)
         canvas[iy[ale], ix[ale] + 1] = self.hcol[sel][ale]
 
+    # -- efecto psicodelico -----------------------------------------------
+    def _psyco(self, canvas, t, n, F):
+        """Mezcla translucida de color sobre el cielo:
+           * remolino suave siempre presente (respira con medios/agudos)
+           * cada golpe fuerte de medios/agudos lanza una ONDA IRREGULAR que cruza el cielo."""
+        X, Y, k = self.X, self.Y, self.psyco_k
+        medios, agud, pm = F["medios"][n], F["agudos"][n], F["pulso_ma"][n]
+
+        campo = (np.sin(X * 0.07 + np.sin(Y * 0.11 + t * 0.6) * 2.5 + t * 0.8)
+                 + np.sin(Y * 0.13 - t * 0.5 + np.sin(X * 0.05 + t * 0.4) * 2.0)) * 0.25 + 0.5
+        a_amb = (0.03 + 0.08 * medios + 0.05 * agud + 0.10 * pm) * campo * k
+        A = a_amb.astype(np.float32)
+        C = A[..., None] * arcoiris(campo * 0.35 + t * 0.05 + pm * 0.10)
+
+        t0s = F["ondas_t0"]
+        i1 = int(np.searchsorted(t0s, t, side="right"))
+        i0 = max(int(np.searchsorted(t0s, t - 3.6)), i1 - 4)          # maximo 4 ondas a la vez
+        for o in F["ondas"][i0:i1]:
+            edad, vida = t - o["t0"], o["dur"] + 1.0
+            if edad >= vida:
+                continue
+            ca, sa = np.cos(o["ang"]), np.sin(o["ang"])
+            proj = X * ca + Y * sa                                      # eje de avance
+            perp = -X * sa + Y * ca                                     # eje transversal
+            frente = proj.min() - 10 + (proj.max() - proj.min() + 20) * edad / o["dur"]
+            f1, f2, f3 = o["fases"]
+            irr = (5.0 * np.sin(perp * 0.23 + f1 + edad * 1.5)          # borde irregular
+                   + 3.0 * np.sin(perp * 0.51 + f2 - edad * 2.1)
+                   + 2.5 * np.sin(proj * 0.11 + f3))
+            u = frente - proj + irr                                     # >0 = detras del frente
+            env = np.where(u > 0, np.exp(-np.maximum(u, 0) / 26.0), np.exp(np.minimum(u, 0) / 2.5))
+            ondulacion = 0.5 + 0.5 * np.cos(u * 0.55 - edad * 3.0)
+            fade = np.clip((vida - edad) / 0.8, 0, 1)
+            w = (o["f"] * 0.42 * k * fade) * env * (0.3 + 0.7 * ondulacion)
+            A = A + w
+            C = C + w[..., None] * arcoiris(o["hue"] + u * 0.012 + perp * 0.004 + edad * 0.12)
+
+        a = np.clip(A, 0, PSYCO_ALFA_MAX)
+        col = C / (A[..., None] + 1e-6)
+        q = PSYCO_NIVELES_ALFA
+        aq = (np.floor(a * q + self.bayer) / q)[..., None]              # transparencia con tramado
+        return np.clip(canvas * (1 - aq) + col * aq, 0, 255).astype(np.uint8)
+
     # -- frame completo ----------------------------------------------------
     def frame(self, n, F):
         t = n / FPS
@@ -329,6 +438,8 @@ class Escena:
         # cielo: pulsa con graves y beat
         brillo = 1.0 + 0.30 * graves + 0.18 * pulso
         canvas = np.clip(self.cielo * brillo, 0, 255).astype(np.uint8)
+        if self.psyco:                                       # ondas de color translucidas sobre el cielo
+            canvas = self._psyco(canvas, t, n, F)
 
         # estrellas: titilan, mas con agudos
         for (sx, sy), fase in zip(self.est, self.est_fase):
@@ -406,14 +517,18 @@ def main():
     ap.add_argument("--fps", type=int, default=FPS)
     ap.add_argument("--preview", type=float, default=0, help="renderizar solo N segundos")
     ap.add_argument("--png", type=float, default=None, help="guardar un frame en el segundo T como PNG")
+    ap.add_argument("-psyco", "--psyco", action="store_true",
+                    help="ondas psicodelicas translucidas en el cielo, al ritmo de medios/agudos")
+    ap.add_argument("--psyco-intensidad", type=float, default=1.0,
+                    help="fuerza del efecto psyco (0.3 sutil ... 1 normal ... 1.6 intenso)")
     a = ap.parse_args()
     FPS = a.fps
 
     with tempfile.TemporaryDirectory() as tmp:
         print("1/3 Analizando audio...")
-        F = analizar(a.audio, FPS, a.demucs, tmp)
+        F = analizar(a.audio, FPS, a.demucs, tmp, psyco=a.psyco)
         print("2/3 Preparando escena...")
-        escena = Escena(a.personaje)
+        escena = Escena(a.personaje, psyco=a.psyco, psyco_intensidad=a.psyco_intensidad)
 
         if a.png is not None:
             n = min(int(a.png * FPS), F["n"] - 1)
