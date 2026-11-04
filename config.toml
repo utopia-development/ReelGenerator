@@ -1,0 +1,157 @@
+# =============================================================================
+#  config.toml  -  TODO lo ajustable de pixelvoz vive aqui
+# =============================================================================
+#  * Si borras una linea, se usa el valor por defecto (el que ves escrito aqui).
+#  * Rutas de sprites: relativas a la carpeta del proyecto.
+#  * Usa otro archivo con:  python main.py audio.mp3 --config mi_config.toml
+#  * Despues de cambiar algo, prueba rapido con:  python main.py audio.mp3 --png 10
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#  [video]  DIMENSIONES, TAMANO DE PIXEL Y RESOLUCION FINAL
+# -----------------------------------------------------------------------------
+#  El arte se dibuja en un canvas chiquito y luego cada pixel se agranda:
+#
+#      canvas de arte = resolucion_final / tamano_pixel
+#      1280x720 / 10  ->  128x72 pixeles de arte   (cada pixel = cuadro de 10x10)
+#
+#  - Mas grande tamano_pixel  => pixeles mas gordos, escena mas "simple".
+#  - Menor tamano_pixel       => mas pixeles de arte, escena mas detallada
+#                                (ojo: el personaje mide 46 px de ancho).
+#  - resolucion_final DEBE ser divisible entre tamano_pixel, y con ancho/alto PARES.
+#
+#  Ejemplos listos para copiar:
+#    Horizontal 720p   : resolucion_final = [1280, 720]    tamano_pixel = 10  -> arte 128x72
+#    Horizontal 1080p  : resolucion_final = [1920, 1080]   tamano_pixel = 15  -> arte 128x72
+#    Vertical (Reels)  : resolucion_final = [1080, 1920]   tamano_pixel = 15  -> arte 72x128
+#    Cuadrado          : resolucion_final = [1080, 1080]   tamano_pixel = 12  -> arte 90x90
+[video]
+fps = 24
+resolucion_final = [1280, 720]
+tamano_pixel = 10
+
+# -----------------------------------------------------------------------------
+#  [colores]  paleta de la escena (RGB 0-255)
+# -----------------------------------------------------------------------------
+[colores]
+cielo_arriba = [14, 16, 38]
+cielo_abajo  = [74, 52, 92]
+colina_lejos = [38, 38, 70]
+colina_cerca = [24, 40, 56]
+suelo        = [16, 30, 30]
+hojas = [[222, 126, 44], [236, 182, 56], [186, 74, 44], [150, 170, 64]]
+
+# -----------------------------------------------------------------------------
+#  [escena]  composicion general
+# -----------------------------------------------------------------------------
+[escena]
+semilla = 7            # cambia la distribucion al azar de estrellas / hojas / arboles
+n_estrellas = 45
+luna_x_pct = 81.25     # posicion de la luna, en % del ancho del canvas
+luna_y_pct = 20.83     # ... y en % del alto
+luna_radio = 7         # en pixeles de arte
+suelo_alto = 7         # alto de la franja de suelo, en pixeles de arte
+
+# -----------------------------------------------------------------------------
+#  [cielo]  cuanto reacciona el cielo a la musica
+# -----------------------------------------------------------------------------
+[cielo]
+brillo_graves = 0.30          # el cielo se ilumina con los graves (0 = no reacciona)
+brillo_pulso = 0.18           # ... y con cada beat
+luna_brillo_graves = 0.25     # la luna pulsa con los graves
+estrellas_vel = 2.0           # velocidad base del titileo
+estrellas_vel_agudos = 3.0    # titilean mas rapido con los agudos
+
+# -----------------------------------------------------------------------------
+#  [arboles]  balanceo con el viento
+# -----------------------------------------------------------------------------
+[arboles]
+sprite = "sprites/arbol.txt"
+amplitud_cerca = 3.5          # cuantos pixeles se mueve la punta (arboles de adelante)
+amplitud_lejos = 2.0          # ... (arboles del fondo)
+velocidad_balanceo = 2.2      # que tan rapido se mecen
+viento_base = 0.25            # balanceo minimo aunque no haya musica
+viento_musica = 1.0           # cuanto MAS se mecen con la energia de la musica (0 = nada)
+lejos_separacion = 13         # separacion en px entre arboles del fondo
+cerca_izq = [-3, 14]          # x de los arboles de adelante, contando desde el borde IZQUIERDO
+cerca_der = [30, 15]          # ... y distancia al borde DERECHO
+
+# -----------------------------------------------------------------------------
+#  [hojas]  hojas cayendo
+# -----------------------------------------------------------------------------
+[hojas]
+n = 80                        # total de hojas (no todas se ven a la vez)
+caida = [7, 16]               # velocidad de caida (px/s): minima y maxima
+giro = [1.5, 4.0]             # velocidad del aleteo
+empuje_viento = 16            # empuje lateral del viento (px/s)
+vaiven = 5                    # zigzag lateral (px/s)
+mult_pulso = 2.2              # las hojas se aceleran en cada beat (0 = no reaccionan)
+mult_musica = 1.2             # ... y con la energia general de la musica
+visibles_silencio = 0.15      # fraccion de hojas visibles en silencio
+visibles_musica = 0.6         # fraccion EXTRA que aparece con musica fuerte
+frente_pct = 18               # % de hojas que pasan delante del personaje
+
+# -----------------------------------------------------------------------------
+#  [personaje]  el que habla
+# -----------------------------------------------------------------------------
+[personaje]
+sprite = "sprites/personaje.txt"
+boca = "sprites/boca.txt"
+cabeceo_px = 1                # cuantos pixeles sube la cabeza en cada beat (0 = quieto)
+cabeceo_umbral = 0.55         # fuerza del beat (0-1) para que cabecee
+boca_umbrales = [0.12, 0.35, 0.65]   # nivel de voz (0-1) para boca chica / media / abierta
+
+# -----------------------------------------------------------------------------
+#  [audio]  sensibilidad del analisis
+# -----------------------------------------------------------------------------
+[audio]
+voz_compuerta = 0.06          # ruido por debajo de esto se ignora (sube si la boca "tiembla")
+voz_ataque = 0.75             # que tan rapido ABRE la boca (0-1)
+voz_caida = 0.30              # que tan rapido la CIERRA (menor = mas lenta)
+pulso_decaimiento = 0.16      # segundos que dura cada pulso de beat (mayor = movimientos mas largos)
+
+# -----------------------------------------------------------------------------
+#  [psyco]  efecto psicodelico del cielo (tambien se activa con:  -psyco)
+# -----------------------------------------------------------------------------
+[psyco]
+activo = false
+intensidad = 1.0              # 0.3 sutil ... 1.0 normal ... 1.6 intenso
+alfa_max = 0.40               # opacidad maxima (0 invisible, 1 tapa el cielo)
+pasos_color = 12              # niveles de tono (menos = mas posterizado)
+niveles_alfa = 6              # niveles de transparencia con tramado
+min_entre_ondas = 0.45        # segundos minimos entre una onda grande y la siguiente
+
+# -----------------------------------------------------------------------------
+#  [secundario]  UN elemento extra que cruza la pantalla POR DETRAS del personaje
+#                (entra por un lado y sale por el otro, una sola vez por video)
+# -----------------------------------------------------------------------------
+#  Cada frame de animacion es un .txt normal (el mismo formato de tu editor).
+#  Para cambiar de elemento: haz tus sprites y lista sus archivos en 'frames'.
+#  El orden de la lista ES el orden de la animacion (repite uno para ir y volver).
+[secundario]
+activo = true
+frames = ["sprites/pajaro_1.txt", "sprites/pajaro_2.txt", "sprites/pajaro_3.txt", "sprites/pajaro_2.txt"]
+animacion_fps = 6             # velocidad de la ANIMACION del sprite (cuadros por segundo)
+escala = 1                    # agranda el sprite en enteros (2 = el doble)
+mira_a = "derecha"            # hacia donde mira el sprite dibujado: "derecha" | "izquierda"
+                              # (se voltea solo si cruza en sentido contrario)
+
+# --- cuando y por donde cruza ---
+direccion = "izquierda_a_derecha"   # | "derecha_a_izquierda"
+aparece_en_porcentaje = 35    # empieza a entrar al X% de la duracion del video
+aparece_en_segundos = -1      # si es >= 0, MANDA sobre el porcentaje (ej. 8 = en el segundo 8)
+velocidad_px_s = 16           # VELOCIDAD de cruce, en pixeles de arte por segundo
+                              #   tiempo de cruce ~ (ancho_canvas + ancho_sprite) / velocidad
+
+# --- altura ---
+anclaje = "libre"             # "libre" = flota a y_centro_pct | "suelo" = camina sobre el suelo
+y_centro_pct = 42             # altura del centro del sprite, % desde arriba (solo anclaje "libre")
+
+# --- cuanto se mueve con el ritmo ---
+velocidad_pulso = 0.5         # se acelera con cada beat (0.5 = hasta +50% de velocidad)
+rebote_pulso_px = 2           # sube/salta estos pixeles en cada beat
+bamboleo_px = 1.5             # sube y baja suave constante (amplitud)
+bamboleo_hz = 0.5             # ... a esta frecuencia
+
+# --- capa ---
+capa = "delante_arboles"      # | "detras_arboles"  (siempre queda detras del personaje)

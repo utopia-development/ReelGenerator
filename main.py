@@ -5,14 +5,21 @@ pixelvoz  -  audio  ->  video pixel art que reacciona a la voz y a la musica.
   voz      -> controla la boca del personaje
   musica   -> controla viento, hojas, brillo del cielo, luna y "cabeceo" en el beat
 
+TODO lo ajustable (resolucion, velocidades, cuanto reacciona cada cosa al pulso,
+el elemento secundario que cruza la pantalla...) vive en  config.toml
+
 Uso rapido:
     python main.py mi_audio.mp3                 # genera salida.mp4
     python main.py mi_audio.mp3 --demucs        # separa voz/musica con IA (mucho mejor)
     python main.py mi_audio.mp3 --preview 10    # solo los primeros 10 s (para probar rapido)
     python main.py mi_audio.mp3 --png 12.5      # guarda UN frame (t=12.5 s) como PNG, sin video
-    python main.py mi_audio.mp3 -psyco          # ondas psicodelicas en el cielo al ritmo de medios/agudos
+    python main.py mi_audio.mp3 -psyco          # ondas psicodelicas en el cielo (medios/agudos)
+    python main.py mi_audio.mp3 --config otra.toml   # usar otro archivo de configuracion
+    python main.py mi_audio.mp3 --sec-en 3      # el elemento secundario aparece en el seg. 3
+    python main.py mi_audio.mp3 --sin-secundario
 """
 import argparse
+import copy
 import subprocess
 import sys
 import tempfile
@@ -24,27 +31,130 @@ from PIL import Image
 AQUI = Path(__file__).resolve().parent
 
 # --------------------------------------------------------------------------- #
-#  CONFIG  (todo lo "tocable" esta aqui arriba)
+#  CONFIGURACION
+#  Estos son los valores por defecto. Tu config.toml se mezcla ENCIMA: solo hace
+#  falta escribir en el .toml lo que quieras cambiar (lo que falte usa esto).
+#  Mantener sincronizado con config.toml (ahi estan explicados uno por uno).
 # --------------------------------------------------------------------------- #
-W, H = 128, 72          # resolucion REAL del pixel art (baja a proposito)
-ESCALA = 10             # salida = 1280x720  (W*ESCALA x H*ESCALA)
-FPS = 24
+DEFAULTS = {
+    "video": {"fps": 24, "resolucion_final": [1280, 720], "tamano_pixel": 10},
+    "colores": {
+        "cielo_arriba": [14, 16, 38], "cielo_abajo": [74, 52, 92],
+        "colina_lejos": [38, 38, 70], "colina_cerca": [24, 40, 56], "suelo": [16, 30, 30],
+        "hojas": [[222, 126, 44], [236, 182, 56], [186, 74, 44], [150, 170, 64]],
+    },
+    "escena": {"semilla": 7, "n_estrellas": 45, "luna_x_pct": 81.25, "luna_y_pct": 20.83,
+               "luna_radio": 7, "suelo_alto": 7},
+    "cielo": {"brillo_graves": 0.30, "brillo_pulso": 0.18, "luna_brillo_graves": 0.25,
+              "estrellas_vel": 2.0, "estrellas_vel_agudos": 3.0},
+    "arboles": {"sprite": "sprites/arbol.txt", "amplitud_cerca": 3.5, "amplitud_lejos": 2.0,
+                "velocidad_balanceo": 2.2, "viento_base": 0.25, "viento_musica": 1.0,
+                "lejos_separacion": 13, "cerca_izq": [-3, 14], "cerca_der": [30, 15]},
+    "hojas": {"n": 80, "caida": [7, 16], "giro": [1.5, 4.0], "empuje_viento": 16, "vaiven": 5,
+              "mult_pulso": 2.2, "mult_musica": 1.2, "visibles_silencio": 0.15,
+              "visibles_musica": 0.6, "frente_pct": 18},
+    "personaje": {"sprite": "sprites/personaje.txt", "boca": "sprites/boca.txt",
+                  "cabeceo_px": 1, "cabeceo_umbral": 0.55, "boca_umbrales": [0.12, 0.35, 0.65]},
+    "audio": {"voz_compuerta": 0.06, "voz_ataque": 0.75, "voz_caida": 0.30,
+              "pulso_decaimiento": 0.16},
+    "psyco": {"activo": False, "intensidad": 1.0, "alfa_max": 0.40, "pasos_color": 12,
+              "niveles_alfa": 6, "min_entre_ondas": 0.45},
+    "secundario": {
+        "activo": True,
+        "frames": ["sprites/pajaro_1.txt", "sprites/pajaro_2.txt",
+                   "sprites/pajaro_3.txt", "sprites/pajaro_2.txt"],
+        "animacion_fps": 6, "escala": 1,
+        "direccion": "izquierda_a_derecha", "mira_a": "derecha",
+        "aparece_en_porcentaje": 35, "aparece_en_segundos": -1,
+        "velocidad_px_s": 16, "velocidad_pulso": 0.5,
+        "anclaje": "libre", "y_centro_pct": 42,
+        "bamboleo_px": 1.5, "bamboleo_hz": 0.5, "rebote_pulso_px": 2,
+        "capa": "delante_arboles",
+    },
+}
 
-# cielo: color arriba / color abajo (RGB)
-CIELO_ARRIBA = (14, 16, 38)
-CIELO_ABAJO = (74, 52, 92)
-COLINA_LEJOS = (38, 38, 70)
-COLINA_CERCA = (24, 40, 56)
-SUELO = (16, 30, 30)
-COLORES_HOJA = [(222, 126, 44), (236, 182, 56), (186, 74, 44), (150, 170, 64)]
-N_HOJAS = 80
-N_ESTRELLAS = 45
+CFG = None                    # config activa (la fija aplicar_config)
+W = H = ESCALA = FPS = 0      # derivados de [video]; los fija aplicar_config
 
-# modo -psyco: ondas de color translucidas sobre el cielo
-PSYCO_ALFA_MAX = 0.40       # opacidad maxima del efecto (0 = invisible, 1 = tapa el cielo)
-PSYCO_PASOS_COLOR = 12      # niveles de tono (posterizado -> look pixel art)
-PSYCO_NIVELES_ALFA = 6      # niveles de transparencia con tramado (dithering)
-PSYCO_MIN_ENTRE_ONDAS = 0.45  # segundos minimos entre una onda grande y la siguiente
+
+def _tipo_ok(defecto, valor):
+    if isinstance(defecto, bool):
+        return isinstance(valor, bool)
+    if isinstance(defecto, (int, float)):
+        return isinstance(valor, (int, float)) and not isinstance(valor, bool)
+    if isinstance(defecto, str):
+        return isinstance(valor, str)
+    if isinstance(defecto, list):
+        return isinstance(valor, list)
+    return True
+
+
+def _fusionar(base, nuevo, ruta=""):
+    for k, v in nuevo.items():
+        if k not in base:
+            print(f"  ! config: clave desconocida '{ruta}{k}' (se ignora, revisa si esta bien escrita)")
+        elif isinstance(base[k], dict):
+            if not isinstance(v, dict):
+                sys.exit(f"config: '{ruta}{k}' debe ser una seccion [{ruta}{k}]")
+            _fusionar(base[k], v, f"{ruta}{k}.")
+        elif not _tipo_ok(base[k], v):
+            sys.exit(f"config: '{ruta}{k}' tiene un valor de tipo incorrecto: {v!r} "
+                     f"(esperaba algo como {base[k]!r})")
+        else:
+            base[k] = v
+
+
+def cargar_config(ruta=None):
+    """Defaults + (config.toml o el archivo indicado) mezclado encima."""
+    try:
+        import tomllib                                   # Python 3.11+
+    except ImportError:
+        try:
+            import tomli as tomllib                      # Python 3.10: pip install tomli
+        except ImportError:
+            sys.exit("Falta leer TOML: en Python 3.10 instala  pip install tomli")
+    cfg = copy.deepcopy(DEFAULTS)
+    p = Path(ruta) if ruta else AQUI / "config.toml"
+    if p.exists():
+        with open(p, "rb") as f:
+            try:
+                _fusionar(cfg, tomllib.load(f))
+            except tomllib.TOMLDecodeError as e:
+                sys.exit(f"config: error de sintaxis en {p}: {e}")
+        print(f"  Config: {p}")
+    elif ruta:
+        sys.exit(f"No existe el archivo de configuracion: {p}")
+    return cfg
+
+
+def aplicar_config(cfg):
+    """Valida y fija las globales: resolucion final, tamano de pixel y canvas de arte."""
+    global CFG, W, H, ESCALA, FPS
+    v = cfg["video"]
+    rw, rh = (int(x) for x in v["resolucion_final"])
+    p = int(v["tamano_pixel"])
+    if p < 1 or rw % p or rh % p:
+        from math import gcd
+        g = gcd(rw, rh)
+        validos = [d for d in range(2, 41) if g % d == 0]
+        sys.exit(f"config: resolucion_final {rw}x{rh} no es divisible entre tamano_pixel={p}.\n"
+                 f"  Tamanos de pixel que SI encajan con {rw}x{rh}: {validos}")
+    if rw % 2 or rh % 2:
+        sys.exit("config: resolucion_final debe tener ancho y alto PARES (requisito de H.264)")
+    if cfg["secundario"]["direccion"] not in ("izquierda_a_derecha", "derecha_a_izquierda"):
+        sys.exit("config: [secundario] direccion debe ser 'izquierda_a_derecha' o 'derecha_a_izquierda'")
+    if cfg["secundario"]["anclaje"] not in ("libre", "suelo"):
+        sys.exit("config: [secundario] anclaje debe ser 'libre' o 'suelo'")
+    if cfg["secundario"]["capa"] not in ("delante_arboles", "detras_arboles"):
+        sys.exit("config: [secundario] capa debe ser 'delante_arboles' o 'detras_arboles'")
+    CFG = cfg
+    FPS, ESCALA, W, H = int(v["fps"]), p, rw // p, rh // p
+
+
+def ruta_proyecto(r):
+    """Rutas de la config: relativas a la carpeta del proyecto (o absolutas)."""
+    r = Path(r)
+    return r if r.is_absolute() else AQUI / r
 
 
 # --------------------------------------------------------------------------- #
@@ -125,18 +235,21 @@ def pegar(canvas, rgb, mask, x, y, mezcla=None, cantidad=0.0):
     sub[m] = src[m]
 
 
-def pegar_con_viento(canvas, rgb, mask, x, y, t, viento, fase, amp=3.0, mezcla=None, cantidad=0.0):
-    """Mueve cada FILA del sprite en horizontal: la punta se mueve mas que la base."""
+def pegar_con_viento(canvas, rgb, mask, x, y, t, viento, fase, amp=3.0, mezcla=None, cantidad=0.0,
+                     vel=2.2, base=0.25, k=1.0):
+    """Mueve cada FILA del sprite en horizontal: la punta se mueve mas que la base.
+    vel = rapidez del balanceo, base = balanceo minimo sin musica, k = cuanto influye la musica."""
     h = mask.shape[0]
     for j in range(h):
         rel = ((h - 1 - j) / h) ** 1.4                      # 0 en la base, 1 en la punta
-        desp = np.sin(t * 2.2 + fase + j * 0.30) * (0.25 + viento) * amp * rel
+        desp = np.sin(t * vel + fase + j * 0.30) * (base + k * viento) * amp * rel
         pegar(canvas, rgb[j:j + 1], mask[j:j + 1], x + int(round(desp)), y + j, mezcla, cantidad)
 
 
 def arcoiris(h):
     """Tono h (cualquier forma, ciclico 0-1) -> RGB [...,3] float 0-255, posterizado en pasos."""
-    h = np.floor((h % 1.0) * PSYCO_PASOS_COLOR) / PSYCO_PASOS_COLOR
+    pasos = CFG["psyco"]["pasos_color"]
+    h = np.floor((h % 1.0) * pasos) / pasos
     fase = np.array([0.0, 1 / 3, 2 / 3], np.float32)
     return (0.5 + 0.5 * np.cos(2 * np.pi * (h[..., None] + fase))) * 255.0
 
@@ -220,10 +333,11 @@ def features_psyco(S, fr, ts, sr, hop, n, fps):
         d = (np.arange(f0, f1) / fps) - tt
         pulso[f0:f1] = np.maximum(pulso[f0:f1], np.exp(-np.maximum(d, 0) / 0.14))
 
+    min_entre = CFG["psyco"]["min_entre_ondas"]
     rng = np.random.default_rng(11)
     ondas, ultimo = [], -9.0
     for tt, fz in zip(t_on, fuerza):
-        if tt - ultimo < PSYCO_MIN_ENTRE_ONDAS or fz < 0.3:
+        if tt - ultimo < min_entre or fz < 0.3:
             continue
         ultimo = tt
         ang = rng.uniform(-0.55, 0.55) + (np.pi if rng.random() < 0.5 else 0.0)   # sentido y diagonal
@@ -236,6 +350,7 @@ def features_psyco(S, fr, ts, sr, hop, n, fps):
 
 def analizar(audio, fps, usar_demucs, tmpdir, psyco=False):
     import librosa
+    ca = CFG["audio"]
     wav = Path(tmpdir) / "mono.wav"
     ffmpeg_a_wav(audio, wav)
     y_mix, sr = librosa.load(wav, sr=22050, mono=True)
@@ -261,8 +376,9 @@ def analizar(audio, fps, usar_demucs, tmpdir, psyco=False):
 
     r, t = rms(y_voz)
     voz = normalizar(a_frames(r, t, n, fps))
-    voz = np.clip((voz - 0.06) / 0.94, 0, 1)              # compuerta de ruido
-    voz = suavizar(voz, ataque=0.75, caida=0.30)
+    gate = ca["voz_compuerta"]
+    voz = np.clip((voz - gate) / (1 - gate), 0, 1)           # compuerta de ruido
+    voz = suavizar(voz, ataque=ca["voz_ataque"], caida=ca["voz_caida"])
 
     r, t = rms(y_mus)
     musica = suavizar(normalizar(a_frames(r, t, n, fps)), ataque=0.4, caida=0.08)
@@ -281,7 +397,7 @@ def analizar(audio, fps, usar_demucs, tmpdir, psyco=False):
         tf = np.arange(n) / fps
         for b in np.atleast_1d(beats):
             d = tf - b
-            pulso = np.maximum(pulso, np.where(d >= 0, np.exp(-d / 0.16), 0))
+            pulso = np.maximum(pulso, np.where(d >= 0, np.exp(-d / ca["pulso_decaimiento"]), 0))
     except Exception as e:
         print("  ! No pude detectar beats:", e)
 
@@ -298,31 +414,39 @@ def analizar(audio, fps, usar_demucs, tmpdir, psyco=False):
 #  ESCENA  (aqui vive todo el dibujo)
 # --------------------------------------------------------------------------- #
 class Escena:
-    def __init__(self, ruta_personaje, seed=7, psyco=False, psyco_intensidad=1.0):
-        self.rng = np.random.default_rng(seed)
+    def __init__(self, psyco=False):
+        c = CFG
+        self.c = c
+        self.rng = np.random.default_rng(c["escena"]["semilla"])
+        self.per_rgb, self.per_mask = cargar_sprite(ruta_proyecto(c["personaje"]["sprite"]))
+        self.arb_rgb, self.arb_mask = cargar_sprite(ruta_proyecto(c["arboles"]["sprite"]))
+        self.bocas = cargar_bocas(ruta_proyecto(c["personaje"]["boca"]))
         self.psyco = psyco
-        self.psyco_k = float(psyco_intensidad)
+        self.psyco_k = float(c["psyco"]["intensidad"])
         self.X, self.Y = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
         self.bayer = matriz_bayer(H, W)
-        self.per_rgb, self.per_mask = cargar_sprite(ruta_personaje)
-        self.arb_rgb, self.arb_mask = cargar_sprite(AQUI / "sprites" / "arbol.txt")
-        self.bocas = cargar_bocas(AQUI / "sprites" / "boca.txt")
+        self.sec = None
         ph, pw = self.per_mask.shape
         self.px, self.py = (W - pw) // 2, H - ph + 1
+        if pw > W:
+            print(f"  ! El personaje ({pw}px) es mas ancho que el canvas ({W}px): se recortara.")
 
         # --- cielo (gradiente) ---
-        a, b = np.array(CIELO_ARRIBA, np.float32), np.array(CIELO_ABAJO, np.float32)
+        a, b = np.array(c["colores"]["cielo_arriba"], np.float32), np.array(c["colores"]["cielo_abajo"], np.float32)
         k = np.linspace(0, 1, H)[:, None] ** 1.3
         self.cielo = (a * (1 - k) + b * k)[:, None, :] * np.ones((1, W, 1), np.float32)
 
         # --- estrellas ---
-        self.est = np.stack([self.rng.integers(0, W, N_ESTRELLAS),
-                             self.rng.integers(0, int(H * 0.5), N_ESTRELLAS)], 1)
-        self.est_fase = self.rng.uniform(0, 6.28, N_ESTRELLAS)
+        n_est = c["escena"]["n_estrellas"]
+        self.est = np.stack([self.rng.integers(0, W, n_est),
+                             self.rng.integers(0, int(H * 0.5), n_est)], 1)
+        self.est_fase = self.rng.uniform(0, 6.28, n_est)
 
         # --- luna (circulo con mordida = creciente) ---
         yy, xx = np.mgrid[0:H, 0:W]
-        cx, cy, r = 104, 15, 7
+        cx = int(round(W * c["escena"]["luna_x_pct"] / 100))
+        cy = int(round(H * c["escena"]["luna_y_pct"] / 100))
+        r = int(c["escena"]["luna_radio"])
         luna = (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r
         mordida = (xx - (cx + 3)) ** 2 + (yy - (cy - 2)) ** 2 <= (r - 1) ** 2
         self.luna = luna & ~mordida
@@ -333,42 +457,110 @@ class Escena:
         h2 = (H * 0.70 + 4 * np.sin(x * 0.07 + 2) + 2 * np.sin(x * 0.21)).astype(int)
         self.capa_est = np.zeros((H, W, 3), np.uint8)
         self.capa_mask = np.zeros((H, W), bool)
-        for hh, col in ((h1, COLINA_LEJOS), (h2, COLINA_CERCA)):
+        for hh, col in ((h1, c["colores"]["colina_lejos"]), (h2, c["colores"]["colina_cerca"])):
             for xi in range(W):
                 self.capa_est[hh[xi]:, xi] = col
                 self.capa_mask[hh[xi]:, xi] = True
-        self.suelo_y = H - 7
-        self.capa_est[self.suelo_y:] = SUELO
+        self.suelo_y = H - int(c["escena"]["suelo_alto"])
+        self.capa_est[self.suelo_y:] = c["colores"]["suelo"]
         self.capa_mask[self.suelo_y:] = True
         for xi in range(0, W, 3):                           # briznas de pasto
             if self.rng.random() < 0.7:
                 self.capa_est[self.suelo_y - 1, xi] = (30, 60, 48)
                 self.capa_mask[self.suelo_y - 1, xi] = True
 
-        # --- arboles: (x, y_base, fase, capa) ---
+        # --- arboles: (x, y_base, fase) ---
+        ca = c["arboles"]
         th = self.arb_mask.shape[0]
         self.arboles_lejos = [(xi, int(h1[min(max(xi + 7, 0), W - 1)]) + 6 - th, self.rng.uniform(0, 6.28))
-                              for xi in range(-4, W, 13)]
-        self.arboles_cerca = [(xi, self.suelo_y + 3 - th, self.rng.uniform(0, 6.28))
-                              for xi in (-3, 14, 98, 113)]
+                              for xi in range(-4, W, int(ca["lejos_separacion"]))]
+        xs_cerca = [int(d) for d in ca["cerca_izq"]] + [W - int(d) for d in ca["cerca_der"]]
+        self.arboles_cerca = [(xi, self.suelo_y + 3 - th, self.rng.uniform(0, 6.28)) for xi in xs_cerca]
 
         # --- hojas ---
-        n = N_HOJAS
+        ch = c["hojas"]
+        n = int(ch["n"])
         self.hx = self.rng.uniform(-10, W + 10, n)
         self.hy = self.rng.uniform(-5, H, n)
-        self.hvy = self.rng.uniform(7, 16, n)
+        self.hvy = self.rng.uniform(ch["caida"][0], ch["caida"][1], n)
         self.hf = self.rng.uniform(0, 6.28, n)
-        self.hvf = self.rng.uniform(1.5, 4.0, n)
-        self.hcol = np.array(COLORES_HOJA, np.uint8)[self.rng.integers(0, len(COLORES_HOJA), n)]
-        self.hfrente = self.rng.random(n) < 0.18
+        self.hvf = self.rng.uniform(ch["giro"][0], ch["giro"][1], n)
+        self.hcol = np.array(c["colores"]["hojas"], np.uint8)[self.rng.integers(0, len(c["colores"]["hojas"]), n)]
+        self.hfrente = self.rng.random(n) < ch["frente_pct"] / 100.0
         self.horden = self.rng.permutation(n) / n            # cuales aparecen primero segun energia
+
+    # -- elemento secundario (uno por video, cruza de lado a lado) -----------
+    def preparar(self, F):
+        """Pre-calcula la trayectoria del elemento secundario para TODOS los frames
+        (asi --png y --preview saltan a cualquier instante sin 'calentar')."""
+        s = self.c["secundario"]
+        self.sec = None
+        if not s["activo"]:
+            return
+        if not s["frames"]:
+            sys.exit("config: [secundario] frames esta vacio (lista de sprites .txt)")
+        esc = max(1, int(s["escala"]))
+        direc = 1 if s["direccion"] == "izquierda_a_derecha" else -1
+        voltear = (direc > 0 and s["mira_a"] == "izquierda") or (direc < 0 and s["mira_a"] == "derecha")
+        frames = []
+        for r in s["frames"]:
+            rgb, mask = cargar_sprite(ruta_proyecto(r))
+            if esc > 1:
+                rgb, mask = rgb.repeat(esc, 0).repeat(esc, 1), mask.repeat(esc, 0).repeat(esc, 1)
+            if voltear:
+                rgb, mask = rgb[:, ::-1].copy(), mask[:, ::-1].copy()
+            frames.append((rgb, mask))
+        sw = max(m.shape[1] for _, m in frames)
+
+        n, fps = F["n"], FPS
+        inicio = s["aparece_en_segundos"]
+        if inicio < 0:
+            inicio = n / fps * s["aparece_en_porcentaje"] / 100.0
+        f0 = int(inicio * fps)
+        x = -float(sw) if direc > 0 else float(W)
+        xs = np.full(n, np.nan, np.float32)
+        salio = False
+        for i in range(f0, n):
+            v = s["velocidad_px_s"] * (1 + s["velocidad_pulso"] * float(F["pulso"][i]))
+            x += direc * v / fps
+            xs[i] = x
+            if (direc > 0 and x > W) or (direc < 0 and x < -sw):
+                salio = True
+                break
+        sin_pulso = (W + sw) / max(s["velocidad_px_s"], 1e-6)
+        print(f"  Secundario: entra en t={inicio:.1f}s, cruza en ~{sin_pulso:.1f}s "
+              f"({s['velocidad_px_s']} px/s, {len(frames)} frames @ {s['animacion_fps']} fps)")
+        if f0 >= n:
+            print("  ! El secundario empieza despues de que termina el video (no se vera). "
+                  "Usa --sec-en o baja aparece_en_porcentaje.")
+        elif not salio:
+            print("  ! El video termina antes de que el secundario termine de cruzar.")
+        self.sec = dict(frames=frames, xs=xs)
+
+    def _dibujar_secundario(self, canvas, t, n, F):
+        if self.sec is None:
+            return
+        x = self.sec["xs"][n]
+        if np.isnan(x):
+            return
+        s = self.c["secundario"]
+        frames = self.sec["frames"]
+        rgb, mask = frames[int(t * s["animacion_fps"]) % len(frames)]
+        sh = mask.shape[0]
+        if s["anclaje"] == "suelo":
+            y0 = self.suelo_y + 2 - sh                       # pies en el suelo
+        else:
+            y0 = H * s["y_centro_pct"] / 100.0 - sh / 2.0
+        dy = s["bamboleo_px"] * np.sin(2 * np.pi * s["bamboleo_hz"] * t) - s["rebote_pulso_px"] * F["pulso"][n]
+        pegar(canvas, rgb, mask, int(round(x)), int(round(y0 + dy)))
 
     # -- hojas -----------------------------------------------------------
     def _mover_hojas(self, viento, pulso, musica):
+        ch = self.c["hojas"]
         dt = 1.0 / FPS
-        mult = 1.0 + 2.2 * pulso + 1.2 * musica
+        mult = 1.0 + ch["mult_pulso"] * pulso + ch["mult_musica"] * musica
         self.hf += self.hvf * dt
-        self.hx += (viento * 16 + 5 * np.sin(self.hf)) * dt * mult
+        self.hx += (viento * ch["empuje_viento"] + ch["vaiven"] * np.sin(self.hf)) * dt * mult
         self.hy += self.hvy * dt * mult
         fuera = (self.hy > H) | (self.hx > W + 8)
         k = int(fuera.sum())
@@ -377,7 +569,8 @@ class Escena:
             self.hx[fuera] = self.rng.uniform(-30, W, k)
 
     def _dibujar_hojas(self, canvas, musica, frente):
-        visibles = self.horden < (0.15 + 0.6 * musica)
+        ch = self.c["hojas"]
+        visibles = self.horden < (ch["visibles_silencio"] + ch["visibles_musica"] * musica)
         sel = visibles & (self.hfrente == frente)
         ix, iy = self.hx[sel].astype(int), self.hy[sel].astype(int)
         ok = (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H)
@@ -392,6 +585,7 @@ class Escena:
            * remolino suave siempre presente (respira con medios/agudos)
            * cada golpe fuerte de medios/agudos lanza una ONDA IRREGULAR que cruza el cielo."""
         X, Y, k = self.X, self.Y, self.psyco_k
+        cp = self.c["psyco"]
         medios, agud, pm = F["medios"][n], F["agudos"][n], F["pulso_ma"][n]
 
         campo = (np.sin(X * 0.07 + np.sin(Y * 0.11 + t * 0.6) * 2.5 + t * 0.8)
@@ -423,53 +617,64 @@ class Escena:
             A = A + w
             C = C + w[..., None] * arcoiris(o["hue"] + u * 0.012 + perp * 0.004 + edad * 0.12)
 
-        a = np.clip(A, 0, PSYCO_ALFA_MAX)
+        a = np.clip(A, 0, cp["alfa_max"])
         col = C / (A[..., None] + 1e-6)
-        q = PSYCO_NIVELES_ALFA
+        q = cp["niveles_alfa"]
         aq = (np.floor(a * q + self.bayer) / q)[..., None]              # transparencia con tramado
         return np.clip(canvas * (1 - aq) + col * aq, 0, 255).astype(np.uint8)
 
     # -- frame completo ----------------------------------------------------
     def frame(self, n, F):
+        c = self.c
+        cc, car, cp_ = c["cielo"], c["arboles"], c["personaje"]
         t = n / FPS
         voz, musica, graves = F["voz"][n], F["musica"][n], F["graves"][n]
         agudos, pulso, viento = F["agudos"][n], F["pulso"][n], F["viento"][n]
+        sec_detras = c["secundario"]["capa"] == "detras_arboles"
 
         # cielo: pulsa con graves y beat
-        brillo = 1.0 + 0.30 * graves + 0.18 * pulso
+        brillo = 1.0 + cc["brillo_graves"] * graves + cc["brillo_pulso"] * pulso
         canvas = np.clip(self.cielo * brillo, 0, 255).astype(np.uint8)
         if self.psyco:                                       # ondas de color translucidas sobre el cielo
             canvas = self._psyco(canvas, t, n, F)
 
         # estrellas: titilan, mas con agudos
         for (sx, sy), fase in zip(self.est, self.est_fase):
-            v = 0.45 + 0.55 * np.sin(t * (2 + 3 * agudos) + fase)
+            v = 0.45 + 0.55 * np.sin(t * (cc["estrellas_vel"] + cc["estrellas_vel_agudos"] * agudos) + fase)
             if v > 0.2:
                 canvas[sy, sx] = np.clip(np.array([200, 200, 230]) * (0.4 + 0.6 * v), 0, 255)
 
         # luna
-        luz = np.clip(np.array([232, 226, 190]) * (0.85 + 0.25 * graves), 0, 255).astype(np.uint8)
+        luz = np.clip(np.array([232, 226, 190]) * (0.85 + cc["luna_brillo_graves"] * graves), 0, 255).astype(np.uint8)
         canvas[self.luna] = luz
 
         # colinas + suelo
         canvas[self.capa_mask] = self.capa_est[self.capa_mask]
 
+        if sec_detras:
+            self._dibujar_secundario(canvas, t, n, F)
+
         # arboles lejanos (con neblina) y cercanos
+        kw = dict(vel=car["velocidad_balanceo"], base=car["viento_base"], k=car["viento_musica"])
         for x, y, fase in self.arboles_lejos:
             pegar_con_viento(canvas, self.arb_rgb, self.arb_mask, x, y, t, viento, fase,
-                             amp=2.0, mezcla=COLINA_LEJOS, cantidad=0.55)
+                             amp=car["amplitud_lejos"], mezcla=c["colores"]["colina_lejos"], cantidad=0.55, **kw)
         self._mover_hojas(viento, pulso, musica)
         self._dibujar_hojas(canvas, musica, frente=False)
         for x, y, fase in self.arboles_cerca:
             pegar_con_viento(canvas, self.arb_rgb, self.arb_mask, x, y, t, viento, fase,
-                             amp=3.5, mezcla=CIELO_ABAJO, cantidad=0.0)
+                             amp=car["amplitud_cerca"], mezcla=c["colores"]["cielo_abajo"], cantidad=0.0, **kw)
 
-        # personaje (cabecea 1px en el beat)
-        py = self.py - (1 if pulso > 0.55 else 0)
+        if not sec_detras:
+            self._dibujar_secundario(canvas, t, n, F)        # pasa DETRAS del personaje
+
+        # personaje (cabecea en el beat)
+        py = self.py - (cp_["cabeceo_px"] if pulso > cp_["cabeceo_umbral"] else 0)
         pegar(canvas, self.per_rgb, self.per_mask, self.px, py)
 
         # boca segun nivel de voz
-        est = 0 if voz < 0.12 else 1 if voz < 0.35 else 2 if voz < 0.65 else 3
+        u0, u1, u2 = cp_["boca_umbrales"]
+        est = 0 if voz < u0 else 1 if voz < u1 else 2 if voz < u2 else 3
         if est in self.bocas:
             rgb, mask, fila, col = self.bocas[est]
             pegar(canvas, rgb, mask, self.px + col, py + fila)
@@ -508,27 +713,46 @@ def exportar(escena, F, audio, salida, n_frames, fps):
 
 
 def main():
-    global FPS
-    ap = argparse.ArgumentParser(description="Audio -> video pixel art reactivo")
+    ap = argparse.ArgumentParser(description="Audio -> video pixel art reactivo (ajustes en config.toml)")
     ap.add_argument("audio")
     ap.add_argument("-o", "--salida", default="salida.mp4")
-    ap.add_argument("--personaje", default=str(AQUI / "sprites" / "personaje.txt"))
+    ap.add_argument("--config", default=None, help="archivo de configuracion (default: config.toml)")
+    ap.add_argument("--personaje", default=None, help="sprite del personaje (default: el de config.toml)")
     ap.add_argument("--demucs", action="store_true", help="separar voz/musica con IA")
-    ap.add_argument("--fps", type=int, default=FPS)
+    ap.add_argument("--fps", type=int, default=None, help="pisa video.fps de la config")
     ap.add_argument("--preview", type=float, default=0, help="renderizar solo N segundos")
     ap.add_argument("--png", type=float, default=None, help="guardar un frame en el segundo T como PNG")
     ap.add_argument("-psyco", "--psyco", action="store_true",
                     help="ondas psicodelicas translucidas en el cielo, al ritmo de medios/agudos")
-    ap.add_argument("--psyco-intensidad", type=float, default=1.0,
+    ap.add_argument("--psyco-intensidad", type=float, default=None,
                     help="fuerza del efecto psyco (0.3 sutil ... 1 normal ... 1.6 intenso)")
+    ap.add_argument("--sec-en", type=float, default=None,
+                    help="segundo en que entra el elemento secundario (pisa la config)")
+    ap.add_argument("--sin-secundario", action="store_true", help="no dibujar el elemento secundario")
     a = ap.parse_args()
-    FPS = a.fps
+
+    cfg = cargar_config(a.config)
+    if a.fps is not None:
+        cfg["video"]["fps"] = a.fps
+    if a.psyco:
+        cfg["psyco"]["activo"] = True
+    if a.psyco_intensidad is not None:
+        cfg["psyco"]["intensidad"] = a.psyco_intensidad
+    if a.personaje:
+        cfg["personaje"]["sprite"] = a.personaje
+    if a.sec_en is not None:
+        cfg["secundario"]["aparece_en_segundos"] = a.sec_en
+    if a.sin_secundario:
+        cfg["secundario"]["activo"] = False
+    aplicar_config(cfg)
+    print(f"  Video: {W * ESCALA}x{H * ESCALA} | arte {W}x{H} px (1 px = {ESCALA}x{ESCALA}) | {FPS} fps")
 
     with tempfile.TemporaryDirectory() as tmp:
         print("1/3 Analizando audio...")
-        F = analizar(a.audio, FPS, a.demucs, tmp, psyco=a.psyco)
+        F = analizar(a.audio, FPS, a.demucs, tmp, psyco=cfg["psyco"]["activo"])
         print("2/3 Preparando escena...")
-        escena = Escena(a.personaje, psyco=a.psyco, psyco_intensidad=a.psyco_intensidad)
+        escena = Escena(psyco=cfg["psyco"]["activo"])
+        escena.preparar(F)
 
         if a.png is not None:
             n = min(int(a.png * FPS), F["n"] - 1)
