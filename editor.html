@@ -97,7 +97,10 @@
 
   <label class="btn" for="fileInput">📂 Abrir .txt</label>
   <input id="fileInput" type="file" accept=".txt,text/plain">
-
+  
+  <label class="btn" for="imgInput">🖼️ Cargar imagen</label>
+  <input id="imgInput" type="file" accept="image/*">
+  
   <span class="sep"></span>
 
   <button id="toolPencil" class="active" title="Lápiz (B)">✏️ Lápiz</button>
@@ -724,7 +727,143 @@ ABCGGGGGBGGGGGGBEGCCRRRRRRRR.CGGDBGGGGGBBCGGG.
       case '-': case '_': zoom(-2); break;
     }
   });
+// ===================== CARGAR IMAGEN =====================
+document.getElementById('imgInput').addEventListener('change', async (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  try {
+    // --- 1. Cargar imagen ---
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+    URL.revokeObjectURL(url);
 
+    // --- 2. Tamaño destino (pregunta si es grande) ---
+    let W = img.naturalWidth, H = img.naturalHeight;
+    const CAP = 64;
+    if (W > CAP || H > CAP) {
+      const resp = prompt(`Tamaño destino (ancho x alto). Actual: ${W}x${H}`, '32x32');
+      if (!resp) return;
+      const m = resp.toLowerCase().match(/^(\d+)\s*[x×]\s*(\d+)$/);
+      if (!m) { alert('Formato esperado: 32x32'); return; }
+      W = Math.min(256, Math.max(1, +m[1]));
+      H = Math.min(256, Math.max(1, +m[2]));
+    }
+
+    // --- 3. Leer píxeles ---
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const cx = c.getContext('2d');
+    cx.imageSmoothingEnabled = false;  // nearest neighbor
+    cx.drawImage(img, 0, 0, W, H);
+    const data = cx.getImageData(0, 0, W, H).data;
+
+    // --- 4. Píxeles válidos (alpha >= 128) ---
+    const pixels = [];
+    for (let i = 0; i < data.length; i += 4) {
+      pixels.push(data[i+3] < 128 ? null : [data[i], data[i+1], data[i+2]]);
+    }
+
+    // --- 5. Colores únicos ---
+    const seen = new Map();
+    for (const p of pixels) {
+      if (!p) continue;
+      const k = p[0] + ',' + p[1] + ',' + p[2];
+      seen.set(k, (seen.get(k) || 0) + 1);
+    }
+
+    const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let colors, exactMap = null;
+
+    if (seen.size <= LETTERS.length) {
+      // --- 5a. Pocos colores: exactos ---
+      colors = [...seen.keys()].map(k => {
+        const [r,g,b] = k.split(',').map(Number);
+        return { r, g, b };
+      });
+      exactMap = new Map();
+      colors.forEach((c, i) => exactMap.set(c.r+','+c.g+','+c.b, LETTERS[i]));
+    } else {
+      // --- 5b. Muchos colores: cuantizar ---
+      const all = pixels.filter(Boolean).map(([r,g,b]) => ({r,g,b}));
+      colors = medianCut(all, LETTERS.length);
+    }
+
+    // --- 6. Armar paleta y matriz ---
+    const palette = new Map(), order = [];
+    colors.forEach((col, i) => { palette.set(LETTERS[i], col); order.push(LETTERS[i]); });
+
+    const rows = [];
+    for (let y = 0; y < H; y++) {
+      const row = [];
+      for (let x = 0; x < W; x++) {
+        const p = pixels[y * W + x];
+        if (!p) { row.push('.'); continue; }
+        if (exactMap) {
+          row.push(exactMap.get(p[0]+','+p[1]+','+p[2]) || '.');
+        } else {
+          let best = '.', bestD = Infinity;
+          for (const ch of order) {
+            const cc = palette.get(ch);
+            const dr = cc.r-p[0], dg = cc.g-p[1], db = cc.b-p[2];
+            const d = dr*dr + dg*dg + db*db;
+            if (d < bestD) { bestD = d; best = ch; }
+          }
+          row.push(best);
+        }
+      }
+      rows.push(row);
+    }
+
+    // --- 7. Cargar en el editor ---
+    state.palette = palette;
+    state.order   = order;
+    state.rows    = rows;
+    state.cols    = W;
+    state.history = [];
+    state.current = order[0] || '.';
+    renderPalette(); syncColorInput(); scheduleDraw(); updateOutput();
+    toast('🖼️ Imagen convertida (' + W + '×' + H + ', ' + colors.length + ' colores)');
+  } catch (err) {
+    console.error(err);
+    alert('Error al procesar imagen: ' + err.message);
+  }
+  ev.target.value = '';
+});
+
+// --- Median cut simple ---
+function medianCut(pixels, maxColors) {
+  if (!pixels.length) return [];
+  let boxes = [pixels.slice()];
+  while (boxes.length < maxColors) {
+    let best = -1, bestRange = -1, bestAxis = 'r';
+    for (let i = 0; i < boxes.length; i++) {
+      const box = boxes[i];
+      if (box.length < 2) continue;
+      let minR=255,maxR=0,minG=255,maxG=0,minB=255,maxB=0;
+      for (const p of box) {
+        if (p.r<minR) minR=p.r; if (p.r>maxR) maxR=p.r;
+        if (p.g<minG) minG=p.g; if (p.g>maxG) maxG=p.g;
+        if (p.b<minB) minB=p.b; if (p.b>maxB) maxB=p.b;
+      }
+      const rR=maxR-minR, rG=maxG-minG, rB=maxB-minB;
+      const mx = Math.max(rR, rG, rB);
+      if (mx > bestRange) {
+        bestRange = mx; best = i;
+        bestAxis = mx === rR ? 'r' : (mx === rG ? 'g' : 'b');
+      }
+    }
+    if (best < 0) break;
+    const box = boxes[best].sort((a,b) => a[bestAxis] - b[bestAxis]);
+    const mid = Math.floor(box.length / 2);
+    boxes.splice(best, 1, box.slice(0, mid), box.slice(mid));
+  }
+  return boxes.map(box => {
+    let r=0,g=0,b=0;
+    for (const p of box) { r+=p.r; g+=p.g; b+=p.b; }
+    return { r: Math.round(r/box.length), g: Math.round(g/box.length), b: Math.round(b/box.length) };
+  });
+}
   /* =========================================================
      ARRANQUE
      ========================================================= */

@@ -99,7 +99,7 @@ sprite = "sprites/personaje.txt"
 boca = "sprites/boca.txt"
 cabeceo_px = 1                # cuantos pixeles sube la cabeza en cada beat (0 = quieto)
 cabeceo_umbral = 0.55         # fuerza del beat (0-1) para que cabecee
-boca_umbrales = [0.12, 0.35, 0.65]   # nivel de voz (0-1) para boca chica / media / abierta
+boca_umbrales = [0.15, 0.35, 0.58]   # nivel de voz (0-1) para boca chica / media / abierta
 
 # -----------------------------------------------------------------------------
 #  [audio]  sensibilidad del analisis
@@ -130,7 +130,7 @@ min_entre_ondas = 0.45        # segundos minimos entre una onda grande y la sigu
 #  El orden de la lista ES el orden de la animacion (repite uno para ir y volver).
 [secundario]
 activo = true
-frames = ["sprites/pajaro_1.txt", "sprites/pajaro_2.txt", "sprites/pajaro_3.txt", "sprites/pajaro_2.txt"]
+frames = ["sprites/fantasma_1.txt", "sprites/fantasma_2.txt", "sprites/fantasma_3.txt", "sprites/fantasma_2.txt"]
 animacion_fps = 6             # velocidad de la ANIMACION del sprite (cuadros por segundo)
 escala = 1                    # agranda el sprite en enteros (2 = el doble)
 mira_a = "derecha"            # hacia donde mira el sprite dibujado: "derecha" | "izquierda"
